@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ednoda-capstone-data"
+version = "0.1.0"
+description = "Reproducible data prep pipeline for UBC MDS-CL capstone sentence recommendation research"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas",
+  "pyarrow",
+  "pyyaml",
+  "requests",
+  "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "tqdm"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
