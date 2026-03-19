@@ -5,6 +5,8 @@ def test_normalize_cefr_levels():
     assert normalize_cefr("a1") == "A1"
     assert normalize_cefr("Pre-A1") == "A1"
     assert normalize_cefr("B 2") == "B2"
+    assert normalize_cefr("A1.1") == "A1"
+    assert normalize_cefr("B2-1") == "B2"
     assert normalize_cefr("unknown") is None
 
 

@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+nlp = ["spacy", "textstat"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

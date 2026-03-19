@@ -24,10 +24,14 @@ def normalize_cefr(value: object) -> str | None:
     """Return canonical CEFR level in A1..C2 or None."""
     if value is None:
         return None
-    text = str(value).strip().upper()
-    if not text or text in {"NAN", "NONE", "NULL"}:
+    raw = str(value).strip().upper()
+    if not raw or raw in {"NAN", "NONE", "NULL"}:
         return None
-    text = re.sub(r"[^A-Z0-9\- ]", "", text)
+    dotted_match = re.fullmatch(r"([ABC])\s*([12])\s*[.-]\s*\d+", raw)
+    if dotted_match:
+        level = f"{dotted_match.group(1)}{dotted_match.group(2)}"
+        return level if level in CEFR_NUMERIC_MAP else None
+    text = re.sub(r"[^A-Z0-9\- ]", "", raw)
     if text in CEFR_MAP:
         return CEFR_MAP[text]
     match = re.fullmatch(r"([ABC])\s*([12])", text)

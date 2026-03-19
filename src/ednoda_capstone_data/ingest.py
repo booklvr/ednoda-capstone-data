@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,6 +42,46 @@ def _infer_split(filename: str) -> str | None:
     return None
 
 
+def _numeric_level_to_cefr(value: object) -> str | None:
+    try:
+        numeric = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    mapping = {1: "A1", 2: "A2", 3: "B1", 4: "B2", 5: "C1", 6: "C2"}
+    return mapping.get(numeric)
+
+
+def _cefr_sp_headerless_frame(path: Path) -> pd.DataFrame | None:
+    if path.suffix.lower() not in {".txt", ".tsv"}:
+        return None
+    try:
+        df = pd.read_csv(path, sep="\t", header=None)
+    except Exception:
+        return None
+    if df.shape[1] < 3:
+        return None
+    return df.iloc[:, :3].rename(columns={0: "sentence", 1: "label_a", 2: "label_b"})
+
+
+def _resolve_cefr_sp_label(record: pd.Series) -> tuple[str | None, dict[str, int | None]]:
+    label_a = _numeric_level_to_cefr(record.get("label_a"))
+    label_b = _numeric_level_to_cefr(record.get("label_b"))
+    numeric_a = cefr_to_numeric(label_a)
+    numeric_b = cefr_to_numeric(label_b)
+
+    if numeric_a is not None and numeric_b is not None:
+        resolved_numeric = math.floor(((numeric_a + numeric_b) / 2) + 0.5)
+        resolved = _numeric_level_to_cefr(resolved_numeric)
+    else:
+        resolved = label_a or label_b
+
+    return resolved, {
+        "label_a_numeric": numeric_a,
+        "label_b_numeric": numeric_b,
+        "resolved_numeric": cefr_to_numeric(resolved),
+    }
+
+
 def ingest_cefr_sp(raw_dir: Path) -> pd.DataFrame:
     if not raw_dir.exists():
         print(f"[WARN] CEFR-SP raw directory not found: {raw_dir}")
@@ -70,6 +111,12 @@ def ingest_cefr_sp(raw_dir: Path) -> pd.DataFrame:
             continue
         text_col = _choose_column(list(df.columns), TEXT_COLUMN_CANDIDATES)
         cefr_col = _choose_column(list(df.columns), CEFR_COLUMN_CANDIDATES)
+        cefr_sp_headerless = None
+        if not text_col:
+            cefr_sp_headerless = _cefr_sp_headerless_frame(path)
+            if cefr_sp_headerless is not None:
+                df = cefr_sp_headerless
+                text_col = "sentence"
         if not text_col:
             skipped_files.append({"file": str(path.relative_to(raw_dir)), "reason": "no_text_column_detected"})
             print(f"[WARN] Skipping CEFR-SP file {path}: no text-like column detected")
@@ -80,7 +127,16 @@ def ingest_cefr_sp(raw_dir: Path) -> pd.DataFrame:
             text_norm = normalize_text(text_raw)
             if not text_norm:
                 continue
-            cefr = normalize_cefr(record.get(cefr_col)) if cefr_col else None
+            metadata = {
+                "relative_file": str(path.relative_to(raw_dir)),
+                "scanned_files": scanned_files,
+                "skipped_files": skipped_files,
+            }
+            if cefr_sp_headerless is not None:
+                cefr, label_metadata = _resolve_cefr_sp_label(record)
+                metadata.update(label_metadata)
+            else:
+                cefr = normalize_cefr(record.get(cefr_col)) if cefr_col else None
             rows.append(
                 {
                     "record_id": f"cefr_sp::{path.stem}::{idx}",
@@ -103,13 +159,7 @@ def ingest_cefr_sp(raw_dir: Path) -> pd.DataFrame:
                     "license_url": pd.NA,
                     "is_publicly_redistributable": False,
                     "split": split,
-                    "metadata_json": json.dumps(
-                        {
-                            "relative_file": str(path.relative_to(raw_dir)),
-                            "scanned_files": scanned_files,
-                            "skipped_files": skipped_files,
-                        }
-                    ),
+                    "metadata_json": json.dumps(metadata),
                     "created_at_utc": ts,
                 }
             )
@@ -147,11 +197,44 @@ def ingest_cefrj_vocabulary(vocab_csv: Path, c1c2_csv: Path | None = None) -> pd
                 print(f"[WARN] Required CEFR-J vocabulary file missing: {path}")
             continue
         df = pd.read_csv(path)
-        expected = {"word", "cefr", "pos"} if path.name == CEFRJ_VOCAB_FILE else {"word", "cefr"}
-        if expected.issubset(set(c.lower() for c in df.columns)):
+        normalized = {c.lower(): c for c in df.columns}
+
+        vocab_col = normalized.get("headword") or normalized.get("word")
+        pos_col = normalized.get("pos")
+        cefr_col = normalized.get("cefr") or normalized.get("level")
+        lemma_col = normalized.get("lemma")
+        if vocab_col and pos_col and cefr_col:
             print(f"[INFO] Using explicit CEFR-J vocabulary mapping for {path.name}")
-        else:
-            print(f"[WARN] Falling back to heuristic CEFR-J vocabulary mapping for {path.name}")
+            for idx, record in df.iterrows():
+                metadata = {
+                    "core_inventory_1": record.get(normalized.get("coreinventory 1")),
+                    "core_inventory_2": record.get(normalized.get("coreinventory 2")),
+                    "threshold": record.get(normalized.get("threshold")),
+                    "notes": record.get(normalized.get("notes")),
+                }
+                rows.append(
+                    {
+                        "record_id": f"cefrj_vocab::{list_name}::{idx}",
+                        "source_dataset": "cefrj",
+                        "source_record_id": str(idx),
+                        "headword": normalize_text(record.get(vocab_col)),
+                        "lemma": normalize_text(record.get(lemma_col) or record.get(vocab_col)),
+                        "surface_form": normalize_text(record.get(vocab_col)),
+                        "pos": normalize_text(record.get(pos_col)),
+                        "cefr_level": normalize_cefr(record.get(cefr_col)),
+                        "cefr_numeric": cefr_to_numeric(record.get(cefr_col)),
+                        "list_name": list_name,
+                        "license_label": "CEFR-J terms (verify)",
+                        "license_url": pd.NA,
+                        "metadata_json": json.dumps(
+                            {"raw": {k: (None if pd.isna(v) else str(v)) for k, v in metadata.items() if v is not None}}
+                        ),
+                        "created_at_utc": ts,
+                    }
+                )
+            continue
+
+        print(f"[WARN] Falling back to heuristic CEFR-J vocabulary mapping for {path.name}")
         for idx, record in df.iterrows():
             rows.append(_normalize_vocab_record(record, idx, list_name, ts))
     return ensure_columns(pd.DataFrame(rows), VOCABULARY_REFERENCE_COLUMNS)
@@ -165,12 +248,85 @@ def ingest_cefrj_grammar(grammar_csv: Path) -> pd.DataFrame:
     rows: list[dict] = []
     df = pd.read_csv(grammar_csv)
 
-    expected = {"category", "level", "pattern"} if grammar_csv.name == CEFRJ_GRAMMAR_FILE else set()
-    if expected and expected.issubset(set(c.lower() for c in df.columns)):
+    normalized = {c.lower(): c for c in df.columns}
+    explicit_cols = {"id", "shorthand code", "grammatical item", "sentence type", "cefr-j level"}
+    legacy_cols = {"category", "level", "pattern"}
+    if explicit_cols.issubset(normalized):
         print(f"[INFO] Using explicit CEFR-J grammar mapping for {grammar_csv.name}")
-    else:
-        print(f"[WARN] Falling back to heuristic CEFR-J grammar mapping for {grammar_csv.name}")
+        for idx, record in df.iterrows():
+            cefr = normalize_cefr(record.get(normalized["cefr-j level"]) or record.get(normalized.get("freq*disp")))
+            tags = [
+                normalize_text(record.get(normalized.get("shorthand code"))),
+                normalize_text(record.get(normalized.get("sentence type"))),
+            ]
+            tags = [tag for tag in tags if tag]
+            examples = [normalize_text(record.get(normalized.get("grammatical item")))]
+            examples = [example for example in examples if example]
+            metadata = {
+                "cefr_j_level_raw": record.get(normalized.get("cefr-j level")),
+                "freq_disp": record.get(normalized.get("freq*disp")),
+                "core_inventory": record.get(normalized.get("core inventory")),
+                "egp": record.get(normalized.get("egp")),
+                "gselo": record.get(normalized.get("gselo")),
+                "notes": record.get(normalized.get("notes")),
+                "shorthand_code": record.get(normalized.get("shorthand code")),
+            }
+            rows.append(
+                {
+                    "record_id": f"cefrj_grammar::{idx}",
+                    "source_dataset": "cefrj",
+                    "source_record_id": str(record.get(normalized["id"])),
+                    "grammar_item": normalize_text(record.get(normalized["grammatical item"])),
+                    "grammar_description": normalize_text(record.get(normalized.get("sentence type"))),
+                    "cefr_level": cefr,
+                    "cefr_numeric": cefr_to_numeric(cefr),
+                    "framework": "CEFR-J",
+                    "tags_json": json.dumps(tags),
+                    "examples_json": json.dumps(examples),
+                    "license_label": "CEFR-J terms (verify)",
+                    "license_url": pd.NA,
+                    "metadata_json": json.dumps(
+                        {"raw": {k: (None if pd.isna(v) else str(v)) for k, v in metadata.items() if v is not None}},
+                        ensure_ascii=False,
+                    ),
+                    "created_at_utc": ts,
+                }
+            )
+        return ensure_columns(pd.DataFrame(rows), GRAMMAR_REFERENCE_COLUMNS)
 
+    if legacy_cols.issubset(normalized):
+        print(f"[INFO] Using explicit CEFR-J grammar mapping for legacy-format {grammar_csv.name}")
+        for idx, record in df.iterrows():
+            cefr = normalize_cefr(record.get(normalized["level"]))
+            tags = [normalize_text(record.get(normalized["category"]))]
+            tags = [tag for tag in tags if tag]
+            examples = [normalize_text(record.get(normalized.get("example")))]
+            examples = [example for example in examples if example]
+            metadata = {
+                "category": record.get(normalized.get("category")),
+                "description": record.get(normalized.get("description")),
+            }
+            rows.append(
+                {
+                    "record_id": f"cefrj_grammar::{idx}",
+                    "source_dataset": "cefrj",
+                    "source_record_id": str(idx),
+                    "grammar_item": normalize_text(record.get(normalized["pattern"])),
+                    "grammar_description": normalize_text(record.get(normalized.get("description"))),
+                    "cefr_level": cefr,
+                    "cefr_numeric": cefr_to_numeric(cefr),
+                    "framework": "CEFR-J",
+                    "tags_json": json.dumps(tags),
+                    "examples_json": json.dumps(examples),
+                    "license_label": "CEFR-J terms (verify)",
+                    "license_url": pd.NA,
+                    "metadata_json": json.dumps({"raw": {k: (None if pd.isna(v) else str(v)) for k, v in metadata.items() if v is not None}}),
+                    "created_at_utc": ts,
+                }
+            )
+        return ensure_columns(pd.DataFrame(rows), GRAMMAR_REFERENCE_COLUMNS)
+
+    print(f"[WARN] Falling back to heuristic CEFR-J grammar mapping for {grammar_csv.name}")
     for idx, record in df.iterrows():
         cefr = normalize_cefr(record.get("cefr") or record.get("level"))
         grammar_item = normalize_text(record.get("grammar_item") or record.get("category") or record.get("pattern"))
@@ -209,6 +365,19 @@ def ingest_ednoda_snapshot(snapshot_dir: Path) -> pd.DataFrame:
     df = pd.read_csv(files[0])
     text_col = _choose_column(list(df.columns), TEXT_COLUMN_CANDIDATES) or "text"
     cefr_col = _choose_column(list(df.columns), CEFR_COLUMN_CANDIDATES)
+    lowered = {c.lower(): c for c in df.columns}
+    education_node_id_col = lowered.get("education_node_id") or lowered.get("node_id") or lowered.get("id")
+    textbook_col = lowered.get("textbook") or lowered.get("textbook_name")
+    unit_col = lowered.get("unit") or lowered.get("unit_name") or lowered.get("textbook_unit")
+    region_col = lowered.get("region") or lowered.get("region_hint")
+    grade_col = lowered.get("grade") or lowered.get("grade_hint")
+    topic_col = lowered.get("topic_hint") or lowered.get("topic")
+    grammar_col = lowered.get("grammar_hint")
+    lang_col = lowered.get("lang")
+    split_col = lowered.get("split")
+    license_label_col = lowered.get("license_label")
+    license_url_col = lowered.get("license_url")
+    redistributable_col = lowered.get("is_publicly_redistributable")
     for idx, record in df.iterrows():
         text_raw = record.get(text_col)
         text_norm = normalize_text(text_raw)
@@ -216,29 +385,37 @@ def ingest_ednoda_snapshot(snapshot_dir: Path) -> pd.DataFrame:
             continue
         cefr = normalize_cefr(record.get(cefr_col)) if cefr_col else None
         node_type = normalize_text(record.get("node_type")) or pd.NA
+        metadata = {k: (None if pd.isna(v) else str(v)) for k, v in record.items()}
         rows.append(
             {
-                "record_id": f"ednoda_snapshot::{idx}",
+                "record_id": f"ednoda_snapshot::{record.get(education_node_id_col) if education_node_id_col else idx}",
                 "source_dataset": "ednoda_snapshot",
                 "source_subdataset": files[0].name,
-                "source_record_id": str(idx),
+                "source_record_id": str(record.get(education_node_id_col) if education_node_id_col else idx),
                 "text": str(text_raw),
                 "text_normalized": text_norm,
-                "lang": normalize_text(record.get("lang") or "en"),
+                "lang": normalize_text(record.get(lang_col) or "en"),
                 "granularity": normalize_text(record.get("granularity") or node_type or "sentence"),
                 "cefr_level": cefr,
                 "cefr_numeric": cefr_to_numeric(cefr),
                 "difficulty_source": normalize_text(record.get("difficulty_source") or "unknown"),
-                "topic_hint": record.get("topic_hint", record.get("topic", pd.NA)),
-                "grammar_hint": record.get("grammar_hint", pd.NA),
-                "grade_hint": record.get("grade_hint", pd.NA),
-                "region_hint": record.get("region_hint", pd.NA),
+                "topic_hint": record.get(topic_col, pd.NA) if topic_col else pd.NA,
+                "grammar_hint": record.get(grammar_col, pd.NA) if grammar_col else pd.NA,
+                "grade_hint": record.get(grade_col, pd.NA) if grade_col else pd.NA,
+                "region_hint": record.get(region_col, pd.NA) if region_col else pd.NA,
                 "node_type": node_type,
-                "license_label": normalize_text(record.get("license_label") or "Internal/Private"),
-                "license_url": record.get("license_url", pd.NA),
-                "is_publicly_redistributable": bool(record.get("is_publicly_redistributable", False)),
-                "split": normalize_text(record.get("split")) or _infer_split(files[0].name),
-                "metadata_json": json.dumps({"raw": {k: (None if pd.isna(v) else str(v)) for k, v in record.items()}}),
+                "license_label": normalize_text(record.get(license_label_col) or "Internal/Private"),
+                "license_url": record.get(license_url_col, pd.NA) if license_url_col else pd.NA,
+                "is_publicly_redistributable": bool(record.get(redistributable_col, False)) if redistributable_col else False,
+                "split": normalize_text(record.get(split_col)) or _infer_split(files[0].name),
+                "metadata_json": json.dumps(
+                    {
+                        "raw": metadata,
+                        "textbook": record.get(textbook_col, None) if textbook_col else None,
+                        "unit": record.get(unit_col, None) if unit_col else None,
+                    },
+                    ensure_ascii=False,
+                ),
                 "created_at_utc": ts,
             }
         )
