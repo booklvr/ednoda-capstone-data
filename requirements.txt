@@ -4,4 +4,3 @@ pyyaml
 requests
 python-dotenv
 pytest
-tqdm

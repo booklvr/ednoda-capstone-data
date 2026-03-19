@@ -1,23 +1,35 @@
 from pathlib import Path
 
-from ednoda_capstone_data.ingest import ingest_cefr_sp, ingest_cefrj_grammar, ingest_cefrj_vocabulary
+from ednoda_capstone_data.ingest import (
+    ingest_cefr_sp,
+    ingest_cefrj_grammar,
+    ingest_cefrj_vocabulary,
+    ingest_ednoda_snapshot,
+)
+
+FIXTURES = Path("tests/fixtures")
 
 
-def test_cefr_sp_ingest_smoke(tmp_path: Path):
-    raw = tmp_path / "CEFR-SP"
-    raw.mkdir()
-    (raw / "sample.csv").write_text("sentence,cefr\nI am here.,A1\n", encoding="utf-8")
-    df = ingest_cefr_sp(raw)
+def test_cefr_sp_ingest_smoke_and_split():
+    df = ingest_cefr_sp(FIXTURES / "cefr_sp")
+    assert len(df) == 2
+    assert set(df["cefr_level"].dropna().tolist()) == {"A1", "B1"}
+    assert all(df["split"] == "train")
+
+
+def test_cefrj_ingest_smoke():
+    vdf = ingest_cefrj_vocabulary(
+        FIXTURES / "cefrj/cefrj-vocabulary-profile-1.5.csv",
+        FIXTURES / "cefrj/octanove-vocabulary-profile-c1c2-1.0.csv",
+    )
+    gdf = ingest_cefrj_grammar(FIXTURES / "cefrj/cefrj-grammar-profile-20180315.csv")
+    assert len(vdf) == 3
+    assert set(vdf["list_name"]) == {"cefrj_vocabulary_profile", "octanove_c1c2"}
+    assert len(gdf) == 1 and gdf.iloc[0]["framework"] == "CEFR-J"
+
+
+def test_ednoda_ingest_smoke():
+    df = ingest_ednoda_snapshot(FIXTURES / "ednoda_snapshot")
     assert len(df) == 1
-    assert df.iloc[0]["cefr_level"] == "A1"
-
-
-def test_cefrj_ingest_smoke(tmp_path: Path):
-    vocab = tmp_path / "cefrj-vocabulary-profile-1.5.csv"
-    vocab.write_text("word,cefr,pos\nrun,B1,verb\n", encoding="utf-8")
-    grammar = tmp_path / "cefrj-grammar-profile-20180315.csv"
-    grammar.write_text("category,level,pattern\nTense,A2,past simple\n", encoding="utf-8")
-    vdf = ingest_cefrj_vocabulary(vocab)
-    gdf = ingest_cefrj_grammar(grammar)
-    assert len(vdf) == 1 and vdf.iloc[0]["cefr_level"] == "B1"
-    assert len(gdf) == 1 and gdf.iloc[0]["cefr_level"] == "A2"
+    assert df.iloc[0]["source_dataset"] == "ednoda_snapshot"
+    assert df.iloc[0]["topic_hint"] == "school"

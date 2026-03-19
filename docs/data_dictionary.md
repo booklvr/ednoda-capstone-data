@@ -1,16 +1,16 @@
-# Data Dictionary
+# Data Dictionary (v1)
 
 ## sentences
-`sentence_id, source_name, source_dataset, source_record_id, text, text_normalized, language, cefr_level, topic, license_id, metadata_json`
+`record_id, source_dataset, source_subdataset, source_record_id, text, text_normalized, lang, granularity, cefr_level, cefr_numeric, difficulty_source, topic_hint, grammar_hint, grade_hint, region_hint, node_type, license_label, license_url, is_publicly_redistributable, split, metadata_json, created_at_utc`
 
 ## vocabulary_reference
-`vocab_id, source_name, source_dataset, headword, lemma, pos, cefr_level, frequency_band, example, notes, license_id`
+`record_id, source_dataset, source_record_id, headword, lemma, surface_form, pos, cefr_level, cefr_numeric, list_name, license_label, license_url, metadata_json, created_at_utc`
 
 ## grammar_reference
-`grammar_id, source_name, source_dataset, grammar_label, grammar_subcategory, pattern, description, cefr_level, example, notes, license_id`
+`record_id, source_dataset, source_record_id, grammar_item, grammar_description, cefr_level, cefr_numeric, framework, tags_json, examples_json, license_label, license_url, metadata_json, created_at_utc`
 
 ## source_registry
-`source_name, source_dataset, source_version, download_url, downloaded_at_utc, raw_path, record_count, checksum_sha256, license_id`
+`source_dataset, source_name, source_url, local_raw_path, download_method, ingest_script, license_label, license_url, notes, version_or_commit, last_verified_utc, included_in_v1`
 
 ## licenses
-`license_id, source_name, license_name, license_url, attribution, usage_notes`
+`source_dataset, license_label, license_url, usage_notes, redistribution_notes, verified_from, last_verified_utc`

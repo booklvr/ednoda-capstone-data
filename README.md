@@ -2,71 +2,80 @@
 
 Reproducible Python data-prep pipeline for UBC MDS-CL capstone sentence recommendation research.
 
-## Repository structure
+## Source provenance (v1)
 
-```text
-ednoda-capstone-data/
-├── README.md
-├── pyproject.toml
-├── requirements.txt
-├── .gitignore
-├── config/
-├── data/
-│   ├── raw/
-│   │   ├── cefr_sp/
-│   │   ├── cefrj/
-│   │   └── ednoda_snapshot/
-│   ├── interim/
-│   └── processed/
-├── docs/
-│   ├── onboarding.md
-│   ├── data_dictionary.md
-│   ├── ingestion_guide.md
-│   ├── modeling_handoff.md
-│   └── licensing_notes.md
-├── reports/
-├── scripts/
-│   ├── download_cefr_sp.py
-│   ├── download_cefrj.py
-│   ├── ingest_cefr_sp.py
-│   ├── ingest_cefrj_vocabulary.py
-│   ├── ingest_cefrj_grammar.py
-│   ├── ingest_ednoda_snapshot.py
-│   ├── merge_processed_tables.py
-│   ├── validate_processed_tables.py
-│   └── build_all.py
-├── src/
-│   └── ednoda_capstone_data/
-│       ├── __init__.py
-│       ├── schemas.py
-│       ├── normalize.py
-│       ├── io_utils.py
-│       ├── ingest.py
-│       └── validate.py
-└── tests/
-    ├── test_normalize.py
-    ├── test_schema.py
-    └── test_ingest_smoke.py
-```
-
-## Processed tables
-
-- `sentences.parquet`
-- `vocabulary_reference.parquet`
-- `grammar_reference.parquet`
-- `source_registry.parquet`
-- `licenses.parquet`
-
-Schemas are defined in `src/ednoda_capstone_data/schemas.py`.
+- **CEFR-SP**
+  - Canonical upstream repo: https://github.com/yukiar/CEFR-SP
+  - Upstream corpus is expected under `/CEFR-SP` in that repository.
+  - Local placement for this repo: `data/raw/cefr_sp/` (recursive scan for tabular files).
+- **CEFR-J**
+  - GitHub repo: https://github.com/openlanguageprofiles/olp-en-cefrj
+  - Project site: http://www.cefr-j.org/
+  - Local placement: `data/raw/cefrj/`
+  - Required files:
+    - `cefrj-vocabulary-profile-1.5.csv`
+    - `cefrj-grammar-profile-20180315.csv`
+  - Optional file:
+    - `octanove-vocabulary-profile-c1c2-1.0.csv`
+- **Ednoda snapshot (optional)**
+  - Local placement: `data/raw/ednoda_snapshot/` (first CSV will be ingested).
 
 ## Quickstart
 
+### Option A: requirements-only install (offline-friendly)
+
 ```bash
-python -m pip install -e .[dev]
+python -m pip install -r requirements.txt
+PYTHONPATH=src pytest -q
+python scripts/preflight_check.py
 python scripts/build_all.py
-pytest -q
 ```
+
+### Option B: editable install (if supported)
+
+```bash
+python -m pip install --no-build-isolation -e .[dev]
+pytest -q
+python scripts/preflight_check.py
+python scripts/build_all.py
+```
+
+If editable install fails in constrained environments, use Option A.
+
+## Data layers
+
+- `data/raw/`: source files as downloaded/exported, no destructive edits.
+- `data/interim/`: source-specific ingested parquet outputs.
+- `data/processed/`: standardized capstone v1 tables, validation summaries, and build manifest.
+
+## Operations
+
+- Preflight check: `python scripts/preflight_check.py`
+- Tests: `PYTHONPATH=src pytest -q`
+- Full build: `python scripts/build_all.py`
+
+## What success looks like
+
+- `scripts/preflight_check.py` shows required CEFR-SP + CEFR-J files present.
+- `scripts/build_all.py` completes and writes:
+  - processed parquet tables
+  - `data/processed/validation_summary.json`
+  - `data/processed/build_manifest.json`
+- Validation exits cleanly with no hard failures.
+
+## Common failures
+
+- **Missing CEFR-J files**: ensure exact filenames under `data/raw/cefrj/`.
+- **No CEFR-SP rows**: verify tabular data exists under `data/raw/cefr_sp/` and includes sentence-like columns.
+- **Invalid CEFR levels**: source values outside A1..C2 are rejected/flagged.
 
 ## Scope
 
-This repo intentionally excludes ML training, embeddings, spaCy, transformers, and API serving.
+This repo intentionally excludes ML training, embeddings, spaCy, transformers, torch, and API serving.
+
+## Future dataset candidates
+
+- v1 currently focuses on CEFR-SP, CEFR-J, and the optional Ednoda snapshot.
+- Future candidate datasets are tracked in `docs/future_dataset_candidates.md`.
+- These candidates are not yet integrated into the pipeline.
+

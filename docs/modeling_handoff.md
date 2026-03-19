@@ -1,8 +1,15 @@
 # Modeling Handoff
 
-Use `data/processed/sentences.parquet` as the core recommendation corpus and join to references by CEFR and text metadata.
+Start with these files:
 
-Recommended checks before modeling:
-- CEFR balance (`validation_report.json`)
-- Duplicates by `text_normalized`
-- Source mix across CEFR bands
+1. `data/processed/sentences.parquet` (primary sentence corpus)
+2. `data/processed/vocabulary_reference.parquet` (lexical reference)
+3. `data/processed/grammar_reference.parquet` (grammar reference)
+4. `data/processed/validation_summary.json` (quality/provenance checks)
+5. `data/processed/build_manifest.json` (build provenance + row counts)
+
+Recommended first checks:
+- Confirm validation has no hard failures.
+- Filter `sentences` by `cefr_level` and `split`.
+- Join analyses using `cefr_level`/`cefr_numeric`.
+- Verify `source_dataset`, `license_label`, and `license_url` before sharing subsets.

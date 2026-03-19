@@ -1,5 +1,10 @@
 # Licensing Notes
 
-Licensing metadata is captured in `data/processed/licenses.parquet` and linked through `license_id` fields in all processed tables.
+Licensing metadata is tracked in `data/processed/licenses.parquet` and source provenance in `data/processed/source_registry.parquet`.
 
-Always verify CEFR-SP and CEFR-J redistribution terms before publishing derivatives.
+Conservative defaults are intentional:
+- CEFR-SP: `Unknown (verify upstream)`
+- CEFR-J: `CEFR-J terms (verify)`
+- Ednoda snapshot: `Internal/Private`
+
+Do not redistribute source-derived text until license terms are explicitly verified.
