@@ -195,3 +195,5 @@ This is intended as a lightweight baseline feature table for students, not a fin
 ## Acquisition Guide
 
 - See `docs/dataset_acquisition.md` for current source links, licensing notes, and the scripted/manual acquisition split.
+- For internal Ednoda production exports, see `docs/production_snapshot_ingestion.md`.
+- If exporting `education_nodes`/`node_analyses` CSVs, use `python scripts/prepare_ednoda_snapshot_from_exports.py` before ingestion.
