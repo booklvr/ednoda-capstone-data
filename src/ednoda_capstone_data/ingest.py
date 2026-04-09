@@ -370,9 +370,10 @@ def ingest_ednoda_snapshot(snapshot_dir: Path) -> pd.DataFrame:
     textbook_col = lowered.get("textbook") or lowered.get("textbook_name")
     unit_col = lowered.get("unit") or lowered.get("unit_name") or lowered.get("textbook_unit")
     region_col = lowered.get("region") or lowered.get("region_hint")
-    grade_col = lowered.get("grade") or lowered.get("grade_hint")
+    grade_col = lowered.get("grades") or lowered.get("grade") or lowered.get("grade_hint")
     topic_col = lowered.get("topic_hint") or lowered.get("topic")
     grammar_col = lowered.get("grammar_hint")
+    analysis_col = lowered.get("analysis_json") or lowered.get("analysis")
     lang_col = lowered.get("lang")
     split_col = lowered.get("split")
     license_label_col = lowered.get("license_label")
@@ -408,6 +409,7 @@ def ingest_ednoda_snapshot(snapshot_dir: Path) -> pd.DataFrame:
                 "license_url": record.get(license_url_col, pd.NA) if license_url_col else pd.NA,
                 "is_publicly_redistributable": bool(record.get(redistributable_col, False)) if redistributable_col else False,
                 "split": normalize_text(record.get(split_col)) or _infer_split(files[0].name),
+                "analysis_json": record.get(analysis_col, pd.NA) if analysis_col else pd.NA,
                 "metadata_json": json.dumps(
                     {
                         "raw": metadata,

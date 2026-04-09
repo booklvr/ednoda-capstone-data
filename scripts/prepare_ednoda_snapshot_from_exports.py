@@ -22,10 +22,23 @@ import pandas as pd
 ATOMIC_NODE_TYPES = {"vocab", "expression", "question", "phonics"}
 
 
+import csv
+
 def _read_csv(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Missing required file: {path}")
-    return pd.read_csv(path)
+    
+    # Use standard csv module which handles pgAdmin's custom escapechar="'" beautifully
+    with open(path, "r", encoding="utf-8") as f:
+        reader = csv.reader(f, quotechar='"', escapechar="'")
+        data = list(reader)
+        
+    if not data:
+        return pd.DataFrame()
+        
+    df = pd.DataFrame(data[1:], columns=data[0])
+    # Empty CSV fields become empty strings natively, covert them to NA for pandas
+    return df.replace("", pd.NA)
 
 
 def _normalize_text(value: object) -> str | None:
@@ -71,10 +84,12 @@ def _latest_node_analysis(df: pd.DataFrame) -> pd.DataFrame:
         normalized.get("sentence_count"),
         normalized.get("source_text_hash"),
         normalized.get("processed_at"),
+        normalized.get("analysis"),
     ]
     keep_cols = [c for c in keep_cols if c is not None]
     latest = latest[keep_cols].copy()
     latest = latest.rename(columns={node_id_col: "education_node_id"})
+    latest["education_node_id"] = latest["education_node_id"].astype("Int64")
 
     # Stable output names
     rename = {
@@ -85,9 +100,98 @@ def _latest_node_analysis(df: pd.DataFrame) -> pd.DataFrame:
         normalized.get("sentence_count"): "sentence_count",
         normalized.get("source_text_hash"): "source_text_hash",
         normalized.get("processed_at"): "analysis_processed_at",
+        normalized.get("analysis"): "analysis_json",
     }
     rename = {k: v for k, v in rename.items() if k is not None}
     return latest.rename(columns=rename)
+
+
+def _aggregate_node_grades(
+    textbooks_df: pd.DataFrame,
+    textbook_nodes_df: pd.DataFrame,
+    lessons_df: pd.DataFrame,
+    lesson_nodes_df: pd.DataFrame
+) -> pd.DataFrame:
+    """Extract and aggregate unique grades for each education_node_id."""
+    grade_records = []
+
+    # Merge textbooks
+    if not textbooks_df.empty and not textbook_nodes_df.empty:
+        tb = textbooks_df.copy()
+        tbn = textbook_nodes_df.copy()
+        
+        tb_cols = {str(c).lower(): c for c in tb.columns}
+        tbn_cols = {str(c).lower(): c for c in tbn.columns}
+        
+        if tb_cols.get("deleted_at"):
+            tb = tb[tb[tb_cols["deleted_at"]].isna()].copy()
+        if tbn_cols.get("deleted_at"):
+            tbn = tbn[tbn[tbn_cols["deleted_at"]].isna()].copy()
+            
+        tb_id = tb_cols.get("id") or tb_cols.get("textbookid")
+        tb_grade = tb_cols.get("grade")
+        tbn_tb_id = tbn_cols.get("textbook_id") or tbn_cols.get("textbookid")
+        tbn_en_id = tbn_cols.get("education_node_id") or tbn_cols.get("educationnodeid")
+        
+        if tb_id and tb_grade and tbn_tb_id and tbn_en_id:
+            merged = tbn[[tbn_en_id, tbn_tb_id]].merge(
+                tb[[tb_id, tb_grade]],
+                left_on=tbn_tb_id,
+                right_on=tb_id,
+                how="inner"
+            )
+            merged = merged[[tbn_en_id, tb_grade]].rename(
+                columns={tbn_en_id: "education_node_id", tb_grade: "grade"}
+            )
+            grade_records.append(merged)
+
+    # Merge lessons
+    if not lessons_df.empty and not lesson_nodes_df.empty:
+        les = lessons_df.copy()
+        lesn = lesson_nodes_df.copy()
+        
+        les_cols = {str(c).lower(): c for c in les.columns}
+        lesn_cols = {str(c).lower(): c for c in lesn.columns}
+        
+        if les_cols.get("deleted_at"):
+            les = les[les[les_cols["deleted_at"]].isna()].copy()
+        if lesn_cols.get("deleted_at"):
+            lesn = lesn[lesn[lesn_cols["deleted_at"]].isna()].copy()
+            
+        les_id = les_cols.get("id") or les_cols.get("lessonid")
+        les_grade = les_cols.get("grade")
+        lesn_les_id = lesn_cols.get("lesson_id") or lesn_cols.get("lessonid")
+        lesn_en_id = lesn_cols.get("education_node_id") or lesn_cols.get("educationnodeid")
+        
+        if les_id and les_grade and lesn_les_id and lesn_en_id:
+            merged = lesn[[lesn_en_id, lesn_les_id]].merge(
+                les[[les_id, les_grade]],
+                left_on=lesn_les_id,
+                right_on=les_id,
+                how="inner"
+            )
+            merged = merged[[lesn_en_id, les_grade]].rename(
+                columns={lesn_en_id: "education_node_id", les_grade: "grade"}
+            )
+            grade_records.append(merged)
+            
+    if not grade_records:
+        return pd.DataFrame(columns=["education_node_id", "grades"])
+        
+    all_grades = pd.concat(grade_records, ignore_index=True)
+    all_grades = all_grades[all_grades["grade"].notna() & (all_grades["grade"].astype(str).str.strip() != "")]
+    
+    if all_grades.empty:
+        return pd.DataFrame(columns=["education_node_id", "grades"])
+    
+    # group by education_node_id and make comma-separated string of unique sorted grades
+    grouped = all_grades.groupby("education_node_id")["grade"].apply(
+        lambda x: ", ".join(sorted(x.astype(str).unique()))
+    ).reset_index()
+    
+    grouped.rename(columns={"grade": "grades"}, inplace=True)
+    grouped["education_node_id"] = grouped["education_node_id"].astype("Int64")
+    return grouped
 
 
 def main() -> None:
@@ -105,6 +209,30 @@ def main() -> None:
         help="CSV export of node_analyses table (optional)",
     )
     parser.add_argument(
+        "--textbooks-csv",
+        type=Path,
+        default=Path("data/raw/ednoda_snapshot_exports/textbooks.csv"),
+        help="CSV export of textbooks table (optional, for grades)",
+    )
+    parser.add_argument(
+        "--textbook-nodes-csv",
+        type=Path,
+        default=Path("data/raw/ednoda_snapshot_exports/textbook_nodes.csv"),
+        help="CSV export of textbook_nodes table (optional, for grades)",
+    )
+    parser.add_argument(
+        "--lessons-csv",
+        type=Path,
+        default=Path("data/raw/ednoda_snapshot_exports/lessons.csv"),
+        help="CSV export of lessons table (optional, for grades)",
+    )
+    parser.add_argument(
+        "--lesson-nodes-csv",
+        type=Path,
+        default=Path("data/raw/ednoda_snapshot_exports/lesson_nodes.csv"),
+        help="CSV export of lesson_nodes table (optional, for grades)",
+    )
+    parser.add_argument(
         "--output-csv",
         type=Path,
         default=Path("data/raw/ednoda_snapshot/ednoda_snapshot_cleaned.csv"),
@@ -116,16 +244,19 @@ def main() -> None:
         default=Path("data/processed/ednoda_snapshot_cleaning_report.json"),
         help="Output cleaning report JSON path",
     )
-    parser.add_argument("--include-private", action="store_true", help="Keep non-public rows")
-    parser.add_argument("--include-unapproved", action="store_true", help="Keep rows not moderation_status=approved")
     parser.add_argument("--include-composites", action="store_true", help="Keep composite_* node types")
-    parser.add_argument("--min-text-len", type=int, default=5, help="Minimum node_text length after trimming")
+    parser.add_argument("--min-text-len", type=int, default=1, help="Minimum node_text length after trimming")
     parser.add_argument("--max-text-len", type=int, default=280, help="Maximum node_text length after trimming")
     parser.add_argument("--max-rows", type=int, default=0, help="Optional cap on output rows (0 = no cap)")
     args = parser.parse_args()
 
     nodes = _read_csv(args.education_nodes_csv)
     analyses = _read_csv(args.node_analyses_csv) if args.node_analyses_csv.exists() else pd.DataFrame()
+    
+    textbooks = _read_csv(args.textbooks_csv) if args.textbooks_csv.exists() else pd.DataFrame()
+    textbook_nodes = _read_csv(args.textbook_nodes_csv) if args.textbook_nodes_csv.exists() else pd.DataFrame()
+    lessons = _read_csv(args.lessons_csv) if args.lessons_csv.exists() else pd.DataFrame()
+    lesson_nodes = _read_csv(args.lesson_nodes_csv) if args.lesson_nodes_csv.exists() else pd.DataFrame()
 
     cols = {c.lower(): c for c in nodes.columns}
     id_col = cols.get("id")
@@ -133,8 +264,6 @@ def main() -> None:
     if not id_col or not text_col:
         raise ValueError("education_nodes export must include id and node_text columns")
 
-    visibility_col = cols.get("visibility")
-    moderation_col = cols.get("moderation_status")
     node_type_col = cols.get("node_type")
     deleted_col = cols.get("deleted_at")
 
@@ -146,16 +275,6 @@ def main() -> None:
         before = len(work)
         work = work[work[deleted_col].isna()].copy()
         report["dropped_deleted_rows"] = int(before - len(work))
-
-    if visibility_col and not args.include_private:
-        before = len(work)
-        work = work[work[visibility_col].astype(str).str.lower() == "public"].copy()
-        report["dropped_non_public_rows"] = int(before - len(work))
-
-    if moderation_col and not args.include_unapproved:
-        before = len(work)
-        work = work[work[moderation_col].astype(str).str.lower() == "approved"].copy()
-        report["dropped_non_approved_rows"] = int(before - len(work))
 
     if node_type_col and not args.include_composites:
         before = len(work)
@@ -180,14 +299,13 @@ def main() -> None:
     report["dropped_duplicate_text_rows"] = int(before - len(work))
 
     analysis_latest = _latest_node_analysis(analyses)
+    grades_df = _aggregate_node_grades(textbooks, textbook_nodes, lessons, lesson_nodes)
 
     out = pd.DataFrame(
         {
             "education_node_id": work[id_col].astype("Int64"),
             "text": work["_text_norm"],
             "node_type": work[node_type_col] if node_type_col else pd.NA,
-            "visibility": work[visibility_col] if visibility_col else pd.NA,
-            "moderation_status": work[moderation_col] if moderation_col else pd.NA,
             "difficulty_source": "internal",
             "lang": "en",
             "license_label": "Internal/Private",
@@ -199,6 +317,7 @@ def main() -> None:
     )
 
     out = out.merge(analysis_latest, on="education_node_id", how="left")
+    out = out.merge(grades_df, on="education_node_id", how="left")
 
     if args.max_rows and args.max_rows > 0:
         out = out.head(args.max_rows).copy()
@@ -209,6 +328,7 @@ def main() -> None:
     report["output_rows"] = int(len(out))
     report["analysis_rows_input"] = int(len(analyses))
     report["analysis_rows_joined"] = int(out["analysis_status"].notna().sum()) if "analysis_status" in out.columns else 0
+    report["grades_joined"] = int(out["grades"].notna().sum()) if "grades" in out.columns else 0
 
     args.report_json.parent.mkdir(parents=True, exist_ok=True)
     args.report_json.write_text(json.dumps(report, indent=2), encoding="utf-8")

@@ -21,6 +21,7 @@ SENTENCES_COLUMNS = [
     "license_url",
     "is_publicly_redistributable",
     "split",
+    "analysis_json",
     "metadata_json",
     "created_at_utc",
 ]
